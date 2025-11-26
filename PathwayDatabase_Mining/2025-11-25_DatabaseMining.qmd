@@ -1,0 +1,160 @@
+---
+title: "Database Mining - Gene Sets of Interest"
+author: "Andre Barros"
+date: last-modified
+execute:
+  echo: true
+  warning: false
+editor: visual
+format:
+  html:
+    toc: true
+    standalone: true
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+---
+
+```{r}
+#| label: setup
+#| code-summary: "Load packages"
+
+# Package management
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+
+pacman::p_load(
+  tidyverse, # Core data manipulation
+  msigdbr,   # Pathway databases
+  ggrepel, ComplexHeatmap, circlize, # Visualization
+  writexl #save excel files
+)
+
+# Create Output directory
+dir.create("pathway_genesets", showWarnings = FALSE)
+```
+
+## Context
+
+This document provides a systematic workflow to query multiple pathway databases and uncover possible gene sets of interest. Specifically in this document, the goal is to find pathways that are linked with 'Ferroptosis', 'Iron' and 'Lipid Oxidation'.
+
+## Databases Covered
+
+| Database     | Description                                           |
+|--------------|-------------------------------------------------------|
+| MSigDB       | Comprehensive collection aggregating multiple sources |
+| GO           | Gene Ontology (BP, MF, CC)                            |
+| KEGG         | Kyoto Encyclopedia of Genes and Genomes               |
+| Reactome     | Curated pathway database                              |
+| WikiPathways | Community-curated pathways                            |
+
+## Define Parameters
+
+For this analysis, the parameters to be used are:
+
+- **Species:** *Mus musculus*
+- **Search Terms:**
+  - 'iron','ferroptosis','glutathione','heme'
+  - 'reactive oxygen species','ROS','oxidative stress','antioxidant',
+  - 'lipid peroxidation','phospholipid peroxidation', 'lipid hydroperoxide', 'lipid oxidation'
+
+```{r}
+#| label: parameters
+#| code-summary: "Set analysis parameters"
+
+# Relevant terms, based on our selection
+RelevantTerms <- c("iron","ferroptosis","glutathione","heme",
+                   "reactive oxygen species","ROS","oxidative stress","antioxidant",
+                   "lipid peroxidation","phospholipid peroxidation", "lipid hydroperoxide", "lipid oxidation")
+
+# Create regex pattern from search terms
+Terms_Pattern <- paste(paste0("\\b", RelevantTerms, "\\b"), collapse = "|")
+
+knitr::asis_output(paste0("<b>Nr. Search terms: </b>", length(RelevantTerms), "<br>"))
+
+```
+
+## Exploring the databases
+
+The `msigdbr` package provides access to the Molecular Signatures Database (MSigDB), which aggregates gene sets from multiple sources including GO, KEGG, Reactome, WikiPathways, and curated literature.
+
+These are the 'collections' available:
+
+```{r}
+#| label: msigdb-collections
+#| code-summary: "View MSigDB collections"
+#| results: hold
+
+# View all available collections and subcategories
+msigdb_collections <- msigdbr_collections(db_species = 'MM') %>% 
+  filter(!gs_collection %in% c('M1')) #M1 excluded - only provides positional info
+
+msigdb_collections
+```
+
+```{r}
+#| label: msigdb-query
+#| code-summary: "Search MSigDB for relevant gene sets"
+#| results: hold
+
+df <- data.frame()
+
+
+for(i in 1:nrow(msigdb_collections)){
+  
+  coll <- msigdb_collections$gs_collection[i]
+  subcoll <- msigdb_collections$gs_subcollection[i]
+  
+  if (subcoll == "") {
+    cat('Taking care of the collection: ',coll,'\n')
+    
+    temp<- msigdbr(species='mouse', collection = coll,db_species = 'MM') %>% 
+      filter(grepl(Terms_Pattern,gs_name,ignore.case = TRUE) | grepl(Terms_Pattern,gs_description,ignore.case = TRUE)) %>%
+      dplyr::select(SetName=gs_name,SetDescription=gs_description,ENSEMBLID=ensembl_gene,GeneSymbol=gene_symbol,
+                    DatabaseName=gs_collection_name,Database=gs_collection,SubDatabase=gs_subcollection) %>%
+      filter(!is.na(ENSEMBLID))
+    
+    df <- rbind(df,temp)
+    
+  } else {
+    
+    cat('Taking care of the collection: ',coll,' subcollection: ',subcoll,'\n')
+    
+    temp <- msigdbr(species='mouse', collection = coll,subcollection = subcoll,db_species = 'MM') %>% 
+      filter(grepl(Terms_Pattern,gs_name,ignore.case = TRUE) | grepl(Terms_Pattern,gs_description,ignore.case = TRUE)) %>%
+      dplyr::select(SetName=gs_name,SetDescription=gs_description,ENSEMBLID=ensembl_gene,GeneSymbol=gene_symbol,
+                    DatabaseName=gs_collection_name,Database=gs_collection,SubDatabase=gs_subcollection) %>%
+      filter(!is.na(ENSEMBLID))
+    
+    df <- rbind(df,temp)
+  }
+  
+}
+
+pathways_only <- df %>% distinct(SetName,SetDescription,DatabaseName,Database,SubDatabase) 
+
+sheets <- list(pathways_only, df)
+names(sheets) <- c("Pathways only", "Full Dataset")
+writexl::write_xlsx(sheets, "pathway_genesets/datasets.xlsx")
+
+```
+
+```{r}
+#| label: summary
+#| code-summary: "Final Results"
+#| results: hold
+
+knitr::asis_output("<b>--- Search Results ---</b><br>")
+knitr::asis_output(paste0("<b>Total gene sets found: </b>", nrow(pathways_only),"<br>"))
+knitr::asis_output(paste0("<b>Total unique genes: </b>", length(unique(df$ENSEMBLID)), "<br>"))
+
+```
+
+## Session Info
+
+```{r}
+#| label: session-info
+#| code-summary: "Session information"
+#| results: hold
+
+sessionInfo()
+```
